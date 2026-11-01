@@ -1,12 +1,10 @@
-# PE Variant Generation Pipeline — Thành viên 2
+# PE Variant Generation Pipeline 
 
 Sinh biến thể PE bằng các action **có sẵn** trong `TIER-MAL/proposed/actions/modifier.py`
 (không viết lại logic biến đổi), theo nhóm A/B/C bạn đã chọn, và ghi kết quả vào
 `transformation_results.csv`.
 
-Đã test thực tế trên máy (clone repo thật, chạy pipeline trên 2 file PE hợp lệ lấy
-từ `proposed/actions/trusted/`): **58/58 biến thể sinh thành công, 58/58 valid PE**,
-và chạy lại lần 2 cho **sha256 giống hệt lần 1** (seed dẫn xuất đúng, tái lập được).
+
 
 ## Cài đặt
 
@@ -27,7 +25,7 @@ python3 generate_variants.py               # chạy thật
 python3 generate_variants.py --limit-samples 3   # debug nhanh trên 3 sample
 ```
 
-Yêu cầu cấu trúc đầu vào:
+Yêu cầu cấu trúc thư mục của dataset như sau:
 
 ```
 dataset/
@@ -66,12 +64,16 @@ dataset/
 `random.choice` tại lúc chạy, để kết quả không đổi giữa các lần chạy. Vì B chỉ
 có đúng 2 action, `PICK_B` thực chất là toàn bộ nhóm B.
 
-## ⚠️ CẦN BẠN XÁC NHẬN: A_B_C là 6 hay 8 tổ hợp?
+## ⚠️ Hiện tại A_B_C sinh 6 tổ hợp(lấy random 6 trong 8 tổ hợp)
+- A: 2 action 
+- B: 2 action 
+- C: 2 action 
 
-Đề bạn ghi "6 thay đổi (A+B+C, 2 thay đổi A, 2 thay đổi B, 2 thay đổi C)" — nhưng
-2×2×2 = 8, không phải 6. Pipeline hiện lấy ngẫu nhiên có seed cố định
-(`ABC_COMBO_SAMPLE_SEED` trong `config.py`) 6 trong 8 tổ hợp, để đúng số lượng bạn
-yêu cầu và vẫn tái lập được. Nếu ý bạn thực ra là dùng đủ cả 8, chỉ cần đổi:
+=> `A*B*C` = 8 tổ hợp action
+
+
+Tuy nhiên, pipeline hiện lấy ngẫu nhiên có seed cố định
+(`ABC_COMBO_SAMPLE_SEED` trong `config.py`) 6 trong 8 tổ hợp, để tránh sinh ra quá nhiều variants. Nếu muốn sinh đủ cả 8, chỉ cần đổi:
 
 ```python
 # config.py
@@ -121,12 +123,27 @@ Mỗi bước biến đổi của mỗi sample có seed riêng, dẫn xuất t�
 | `seed_used` | `BASE_SEED` dùng để dẫn xuất seed từng bước |
 | `success` | pipeline chạy xong không lỗi |
 | `changed` | bytes có thực sự đổi so với gốc không |
-| `valid_pe_lief` / `valid_pe_pefile` / `valid_pe` | kết quả kiểm tra cấu trúc PE (xem `validity.py`) |
+| `valid_pe_original` | PE **gốc** (trước biến đổi) có hợp lệ không — tách "hỏng sẵn từ đầu" khỏi "bị transformation làm hỏng". Tính 1 lần/sample, giống nhau trên toàn bộ 29 dòng của cùng 1 sample |
+| `valid_pe_lief` / `valid_pe_pefile` / `valid_pe` | kết quả kiểm tra cấu trúc PE **sau** biến đổi (xem `validity.py`) |
 | `output_path` | đường dẫn tương đối trong `dataset/variants/` |
 | `sha256_before` / `sha256_after` | hash PE gốc và PE sau biến đổi |
 | `size_before` / `size_after` | kích thước (byte) |
 | `error_message` | lỗi nếu có (exception hoặc lỗi validity) |
 | `step_details` | JSON chi tiết `changed`/`error` từng bước trong chain |
+
+### Cách đọc `valid_pe_original` + `valid_pe` khi tính tỷ lệ "transformation làm hỏng PE"
+
+| `valid_pe_original` | `valid_pe` (sau biến đổi) | Ý nghĩa |
+|---|---|---|
+| True | True | Bình thường — transformation không làm hỏng gì |
+| True | False | **Transformation làm hỏng PE** — nghi vấn thật sự, nên xem `error_message` |
+| False | False | PE gốc đã hỏng sẵn — **không phải lỗi của transformation**, đừng tính vào tỷ lệ "transformation gây hỏng" |
+| False | True | Hiếm nhưng có thể: transformation vô tình "sửa" được cấu trúc gốc |
+
+Khi tính "Báo cáo tác động của từng phép biến đổi" (mục VIII của đề), nên lọc
+`WHERE valid_pe_original = True` trước rồi mới tính tỷ lệ `valid_pe` theo từng
+action, để không đổ oan cho transformation vì PE gốc (nhất là malware packed
+thật) vốn đã có cấu trúc bất thường từ đầu.
 
 `valid_pe` ở đây là **kiểm tra tĩnh cấu trúc PE** (lief parse được + pefile parse
 được + entry point nằm trong section + SizeOfImage hợp lý). Đây **không thay thế**
@@ -135,7 +152,7 @@ functionality test trên VM của Thành viên 1 — theo đúng lưu ý trong �
 là PASS"*. File `functionality_results.csv` của Duyên join vào bằng cột
 `output_path` (= `sample_id` phía Member 1) để ra bảng thống kê cuối cùng.
 
-## Những điểm mình tự quyết định khi code — bạn nên rà lại
+## Lưu ý 
 
 1. **Tên file có prefix family** (`<family>_<name>_<action>.exe`) để tránh trùng
    tên giữa các family khác nhau trong cùng một thư mục `variants/A/` (thư mục đó
@@ -144,6 +161,4 @@ là PASS"*. File `functionality_results.csv` của Duyên join vào bằng cột
 2. **Thứ tự áp dụng trong combo = thứ tự chữ cái** (A trước, B, rồi C) — đã test
    thực nghiệm việc A trước hay sau B không ảnh hưởng tới overlay, nên chọn theo
    thứ tự tên cho dễ đọc log, không phải vì bắt buộc kỹ thuật.
-3. ~~`add_strings_to_overlay` nằm trong nhóm B~~ — đã chuyển sang nhóm A theo yêu
-   cầu cập nhật của bạn (đúng vị trí hơn, vì action này append vào overlay).
-   `add_bytes_to_section_cave` và `add_imports` đã bị bỏ khỏi B.
+
